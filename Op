@@ -1,0 +1,250 @@
+-- [[ Bluezy Hub v2 - Fix Edition ]] --
+
+-- ใช้ลิงก์ Rayfield ตัวเสถียร
+local Success, Rayfield = pcall(function()
+    return loadstring(game:HttpGet('https://raw.githubusercontent.com/shlexware/Rayfield/main/source'))()
+end)
+
+if not Success or not Rayfield then
+    -- หากลิงก์แรกไม่ติด ให้ลองลิงก์สำรอง Sirius
+    Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+end
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local LocalPlayer = Players.LocalPlayer
+
+getgenv().LockEnabled = false
+getgenv().LockSelectedEnabled = false
+getgenv().SpeedEnabled = false
+getgenv().WalkSpeedValue = 16
+getgenv().JumpEnabled = false
+getgenv().JumpPowerValue = 50
+getgenv().TracersEnabled = false
+getgenv().ShowScreenFPS = false
+getgenv().PlayerOverlayEnabled = false
+getgenv().InfAmmoEnabled = false
+getgenv().AutoShootEnabled = false
+getgenv().AutoKillLoopEnabled = false
+getgenv().OilScanLoopEnabled = false
+
+local SelectedPlayerName = ""
+local Tracers = {}
+local Overlays = {}
+
+local oilDrumLocations = {
+    {name = "Base Camp Alpha", position = Vector3.new(100, 5, 50)},
+    {name = "Storage Bunker", position = Vector3.new(-200, 5, 120)},
+    {name = "East Outpost", position = Vector3.new(350, 8, -80)},
+    {name = "West Warehouse", position = Vector3.new(-450, 5, 200)},
+    {name = "North Tower", position = Vector3.new(50, 15, -300)},
+    {name = "South Dock", position = Vector3.new(-100, 5, 400)},
+    {name = "Central Hub", position = Vector3.new(0, 10, 0)},
+    {name = "Fuel Depot A", position = Vector3.new(250, 6, 150)},
+    {name = "Fuel Depot B", position = Vector3.new(-300, 6, -200)},
+    {name = "Hidden Cave", position = Vector3.new(500, -10, 100)},
+}
+
+local locationNames = {}
+for _, loc in ipairs(oilDrumLocations) do
+    table.insert(locationNames, loc.name)
+end
+
+local Window = Rayfield:CreateWindow({
+   Name = "Bluezy Hub v2",
+   LoadingTitle = "กำลังโหลด...",
+   LoadingSubtitle = "by Bluezy",
+   ConfigurationSaving = { Enabled = false },
+   Discord = { Enabled = false },
+   KeySystem = false
+})
+
+local MainTab = Window:CreateTab("Main Hub", 4483362458)
+local TargetTab = Window:CreateTab("Target Player", 4483362458)
+local PlayerTab = Window:CreateTab("Player Mod", 4483362458)
+local OilTab = Window:CreateTab("🛢️ Oil Scanner", 4483362458)
+
+-- ==================== Functions ====================
+local function warpToPosition(position)
+    local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+    if humanoidRootPart then
+        humanoidRootPart.CFrame = CFrame.new(position)
+        task.wait(0.3)
+    end
+end
+
+local function findOilDrumModel(position, radius)
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and (obj.Name:lower():find("oil") or obj.Name:lower():find("drum") or obj.Name:lower():find("barrel")) then
+            local primaryPart = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+            if primaryPart then
+                local distance = (primaryPart.Position - position).Magnitude
+                if distance <= radius then
+                    return true, obj.Name
+                end
+            end
+        end
+    end
+    return false, nil
+end
+
+local function scanAllDrums()
+    for i, location in ipairs(oilDrumLocations) do
+        if not getgenv().OilScanLoopEnabled then break end
+        warpToPosition(location.position)
+        task.wait(0.5)
+        findOilDrumModel(location.position, 20)
+        task.wait(0.2)
+    end
+end
+
+local function getClosestPlayer()
+    local character = LocalPlayer.Character
+    if not character or not character:FindFirstChild("HumanoidRootPart") then return nil end
+    local rootPart = character.HumanoidRootPart
+    local closestPlayer = nil
+    local shortestDistance = math.huge
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character:FindFirstChildOfClass("Humanoid") then
+            local hasForceField = player.Character:FindFirstChildOfClass("ForceField") or player.Character:FindFirstChild("ForceField")
+            if player.Character:FindFirstChildOfClass("Humanoid").Health > 0 and not hasForceField then
+                local distance = (rootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude
+                if distance < shortestDistance then
+                    shortestDistance = distance
+                    closestPlayer = player
+                end
+            end
+        end
+    end
+    return closestPlayer
+end
+
+-- ==================== UI Controls ====================
+MainTab:CreateSection("🔫 Combat Mods & Auto Kill")
+
+MainTab:CreateToggle({
+   Name = "⚔️ Auto Kill Loop (วาร์ปยิงจนตาย)",
+   CurrentValue = false,
+   Flag = "AutoKillLoopToggle",
+   Callback = function(Value) getgenv().AutoKillLoopEnabled = Value end,
+})
+
+MainTab:CreateToggle({
+   Name = "🎯 ยิงอัตโนมัติ (Auto Shoot)",
+   CurrentValue = false,
+   Flag = "AutoShootToggle",
+   Callback = function(Value) getgenv().AutoShootEnabled = Value end,
+})
+
+MainTab:CreateToggle({
+   Name = "♾️ กระสุนไม่จำกัด (Infinite Ammo)",
+   CurrentValue = false,
+   Flag = "InfAmmoToggle",
+   Callback = function(Value) getgenv().InfAmmoEnabled = Value end,
+})
+
+-- Target Tab
+local TargetDropdown = TargetTab:CreateDropdown({
+   Name = "เลือกผู้เล่น",
+   Options = {"Searching..."},
+   CurrentOption = {""},
+   Flag = "TargetDropdown",
+   Callback = function(Option) SelectedPlayerName = type(Option) == "table" and Option[1] or Option end,
+})
+
+TargetTab:CreateButton({
+   Name = "⚡ วาร์ปไปหาผู้เล่นที่เลือก",
+   Callback = function()
+      local target = Players:FindFirstChild(SelectedPlayerName)
+      if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+         if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            LocalPlayer.Character.HumanoidRootPart.CFrame = target.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 3)
+         end
+      end
+   end,
+})
+
+task.spawn(function()
+   while task.wait(2) do
+      local playerList = {}
+      for _, p in pairs(Players:GetPlayers()) do
+         if p ~= LocalPlayer then table.insert(playerList, p.Name) end
+      end
+      pcall(function() TargetDropdown:Refresh(playerList) end)
+   end
+end)
+
+-- Player Tab
+PlayerTab:CreateToggle({
+   Name = "เปิด/ปิด วิ่งเร็ว",
+   CurrentValue = false,
+   Flag = "SpeedToggle",
+   Callback = function(Value)
+      getgenv().SpeedEnabled = Value
+      if not Value and LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
+         LocalPlayer.Character:FindFirstChildOfClass("Humanoid").WalkSpeed = 16
+      end
+   end,
+})
+
+PlayerTab:CreateSlider({
+   Name = "ปรับความเร็ว (WalkSpeed)",
+   Range = {16, 300},
+   Increment = 1,
+   Suffix = "Speed",
+   CurrentValue = 16,
+   Flag = "WalkSpeedSlider",
+   Callback = function(Value) getgenv().WalkSpeedValue = Value end,
+})
+
+-- Oil Tab
+OilTab:CreateDropdown({
+   Name = "เลือกจุดถังน้ำมันวาร์ปไป",
+   Options = locationNames,
+   CurrentOption = locationNames[1],
+   Flag = "OilWarpDropdown",
+   Callback = function(Option)
+      local selectedOption = type(Option) == "table" and Option[1] or Option
+      for _, loc in ipairs(oilDrumLocations) do
+         if loc.name == selectedOption then
+            warpToPosition(loc.position)
+            local found, drumName = findOilDrumModel(loc.position, 20)
+            local status = found and ("✅ พบถัง: " .. (drumName or "Unknown")) or "❌ ถังโดนขโมยไปแล้ว!"
+            Rayfield:Notify({ Title = loc.name, Content = status, Duration = 3 })
+            break
+         end
+      end
+   end,
+})
+
+OilTab:CreateToggle({
+   Name = "เปิด/ปิด สแกนถังน้ำมันอัตโนมัติ",
+   CurrentValue = false,
+   Flag = "OilScannerToggle",
+   Callback = function(Value)
+      getgenv().OilScanLoopEnabled = Value
+      if getgenv().OilScanLoopEnabled then
+         task.spawn(function()
+            while getgenv().OilScanLoopEnabled do
+               scanAllDrums()
+               task.wait(1)
+            end
+         end)
+      end
+   end,
+})
+
+-- Loops
+RunService.Stepped:Connect(function()
+    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
+        local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if getgenv().SpeedEnabled then humanoid.WalkSpeed = getgenv().WalkSpeedValue end
+        if getgenv().JumpEnabled then humanoid.UseJumpPower = true; humanoid.JumpPower = getgenv().JumpPowerValue end
+    end
+end)
+
+Rayfield:Notify({ Title = "Ready!", Content = "สคริปต์พร้อมใช้งานแล้วครับ", Duration = 3 })
