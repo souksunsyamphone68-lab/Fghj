@@ -1,0 +1,542 @@
+-- [[ Bluezy Hub v2 + War Tycoon: Oil Drum Scanner ]] --
+
+-- 1. ดึง Rayfield UI Library มาใช้งาน
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+
+-- 2. ดึง Services ที่จำเป็น
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local LocalPlayer = Players.LocalPlayer
+
+-- 3. ตัวแปรสำหรับระบบต่างๆ
+getgenv().LockEnabled = false
+getgenv().LockSelectedEnabled = false
+getgenv().SpeedEnabled = false
+getgenv().WalkSpeedValue = 16
+getgenv().JumpEnabled = false
+getgenv().JumpPowerValue = 50
+getgenv().TracersEnabled = false
+getgenv().ShowScreenFPS = false
+getgenv().PlayerOverlayEnabled = false
+getgenv().InfAmmoEnabled = false
+getgenv().AutoShootEnabled = false
+getgenv().AutoKillLoopEnabled = false
+getgenv().OilScanLoopEnabled = false
+
+local SelectedPlayerName = ""
+local Tracers = {}
+local Overlays = {}
+
+-- 📍 รายชื่อตำแหน่งถังน้ำมันทั่ว map
+local oilDrumLocations = {
+    {name = "Base Camp Alpha", position = Vector3.new(100, 5, 50)},
+    {name = "Storage Bunker", position = Vector3.new(-200, 5, 120)},
+    {name = "East Outpost", position = Vector3.new(350, 8, -80)},
+    {name = "West Warehouse", position = Vector3.new(-450, 5, 200)},
+    {name = "North Tower", position = Vector3.new(50, 15, -300)},
+    {name = "South Dock", position = Vector3.new(-100, 5, 400)},
+    {name = "Central Hub", position = Vector3.new(0, 10, 0)},
+    {name = "Fuel Depot A", position = Vector3.new(250, 6, 150)},
+    {name = "Fuel Depot B", position = Vector3.new(-300, 6, -200)},
+    {name = "Hidden Cave", position = Vector3.new(500, -10, 100)},
+}
+
+local locationNames = {}
+for _, loc in ipairs(oilDrumLocations) do
+    table.insert(locationNames, loc.name)
+end
+
+-- 4. คำนวณ FPS
+local FPS = 0
+local FrameCount = 0
+local LastCheck = tick()
+
+RunService.RenderStepped:Connect(function()
+    FrameCount = FrameCount + 1
+    if tick() - LastCheck >= 1 then
+        FPS = FrameCount
+        FrameCount = 0
+        LastCheck = tick()
+    end
+end)
+
+-- 5. GUI แสดง FPS มุมขวาบนหน้าจอ
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "BluezyFPSGui"
+ScreenGui.ResetOnSpawn = false
+
+if gethui then
+    ScreenGui.Parent = gethui()
+elseif syn and syn.protect_gui then
+    syn.protect_gui(ScreenGui)
+    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+else
+    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+end
+
+local FPSLabel = Instance.new("TextLabel")
+FPSLabel.Name = "FPSDisplay"
+FPSLabel.Size = UDim2.new(0, 120, 0, 30)
+FPSLabel.Position = UDim2.new(1, -130, 0, 10)
+FPSLabel.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+FPSLabel.BackgroundTransparency = 0.3
+FPSLabel.TextColor3 = Color3.fromRGB(0, 255, 120)
+FPSLabel.TextSize = 14
+FPSLabel.Font = Enum.Font.GothamBold
+FPSLabel.Text = "FPS: 0"
+FPSLabel.Visible = false
+FPSLabel.Parent = ScreenGui
+
+local FPSCorner = Instance.new("UICorner")
+FPSCorner.CornerRadius = UDim.new(0, 6)
+FPSCorner.Parent = FPSLabel
+
+local FPSStroke = Instance.new("UIStroke")
+FPSStroke.Color = Color3.fromRGB(0, 255, 120)
+FPSStroke.Thickness = 1
+FPSStroke.Parent = FPSLabel
+
+RunService.RenderStepped:Connect(function()
+    if getgenv().ShowScreenFPS then
+        FPSLabel.Text = "⚡ " .. tostring(FPS) .. " FPS"
+        FPSLabel.Visible = true
+    else
+        FPSLabel.Visible = false
+    end
+end)
+
+-- 🛠️ Helper Functions สำหรับ Oil Drum Scanner
+local function warpToPosition(position)
+    local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+    if humanoidRootPart then
+        humanoidRootPart.CFrame = CFrame.new(position)
+        task.wait(0.3)
+    end
+end
+
+local function findOilDrumModel(position, radius)
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and (obj.Name:lower():find("oil") or obj.Name:lower():find("drum") or obj.Name:lower():find("barrel")) then
+            local primaryPart = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+            if primaryPart then
+                local distance = (primaryPart.Position - position).Magnitude
+                if distance <= radius then
+                    return true, obj.Name
+                end
+            end
+        end
+    end
+    return false, nil
+end
+
+local function scanAllDrums()
+    print("========================================")
+    print("🔍 เริ่มสแกนถังน้ำมันทั้งหมดบน map...")
+    print("========================================")
+    
+    local results = { found = {}, stolen = {} }
+    
+    for i, location in ipairs(oilDrumLocations) do
+        if not getgenv().OilScanLoopEnabled then break end
+        
+        print(string.format("\n📍 [%d/%d] ไปที่: %s", i, #oilDrumLocations, location.name))
+        warpToPosition(location.position)
+        task.wait(0.5)
+        
+        local found, drumName = findOilDrumModel(location.position, 20)
+        
+        if found then
+            table.insert(results.found, { name = location.name, modelName = drumName })
+            print(string.format("   ✅ พบถังน้ำมัน: %s", drumName or "Unknown"))
+        else
+            table.insert(results.stolen, { name = location.name })
+            print(string.format("   ❌ ถังน้ำมันหายไป / โดนขโมยไปแล้ว!"))
+        end
+        
+        task.wait(0.2)
+    end
+    
+    print("\n📊 สรุปผลการตรวจเช็ค:")
+    print(string.format("✅ พบ: %d จุด | ❌ หาย/ถูกขโมย: %d จุด", #results.found, #results.stolen))
+    print("========================================\n")
+end
+
+-- 6. ฟังก์ชันค้นหาผู้เล่นใกล้ที่สุด (ข้ามคนที่มีเกราะอมตะ / ForceField)
+local function getClosestPlayer()
+    local character = LocalPlayer.Character
+    if not character or not character:FindFirstChild("HumanoidRootPart") then return nil end
+    
+    local rootPart = character.HumanoidRootPart
+    local closestPlayer = nil
+    local shortestDistance = math.huge
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character:FindFirstChildOfClass("Humanoid") then
+            local hasForceField = player.Character:FindFirstChildOfClass("ForceField") or player.Character:FindFirstChild("ForceField")
+            
+            if player.Character:FindFirstChildOfClass("Humanoid").Health > 0 and not hasForceField then
+                local distance = (rootPart.Position - player.Character.HumanoidRootPart.Position).Magnitude
+                if distance < shortestDistance then
+                    shortestDistance = distance
+                    closestPlayer = player
+                end
+            end
+        end
+    end
+    return closestPlayer
+end
+
+-- ==================== 7. ระบบ Real-time Player Overlay & Tracers ====================
+local function createOverlay(player)
+    if player == LocalPlayer then return end
+    local text = Drawing.new("Text")
+    text.Color = Color3.fromRGB(255, 255, 0)
+    text.Size = 13
+    text.Center = true
+    text.Outline = true
+    text.OutlineColor = Color3.fromRGB(0, 0, 0)
+    text.Visible = false
+    Overlays[player] = text
+end
+
+local function removeOverlay(player)
+    if Overlays[player] then
+        Overlays[player]:Remove()
+        Overlays[player] = nil
+    end
+end
+
+local function createTracer(player)
+    if player == LocalPlayer then return end
+    local line = Drawing.new("Line")
+    line.Color = Color3.fromRGB(255, 0, 0)
+    line.Thickness = 1.5
+    line.Transparency = 1
+    line.Visible = false
+
+    local text = Drawing.new("Text")
+    text.Color = Color3.fromRGB(255, 255, 255)
+    text.Size = 13
+    text.Center = true
+    text.Outline = true
+    text.OutlineColor = Color3.fromRGB(0, 0, 0)
+    text.Visible = false
+
+    Tracers[player] = {Line = line, Text = text}
+end
+
+local function removeTracer(player)
+    if Tracers[player] then
+        if Tracers[player].Line then Tracers[player].Line:Remove() end
+        if Tracers[player].Text then Tracers[player].Text:Remove() end
+        Tracers[player] = nil
+    end
+end
+
+for _, player in pairs(Players:GetPlayers()) do 
+    createTracer(player) 
+    createOverlay(player)
+end
+
+Players.PlayerAdded:Connect(function(p) createTracer(p); createOverlay(p) end)
+Players.PlayerRemoving:Connect(function(p) removeTracer(p); removeOverlay(p) end)
+
+RunService.RenderStepped:Connect(function()
+    local camera = workspace.CurrentCamera
+    local myChar = LocalPlayer.Character
+    local myHrp = myChar and myChar:FindFirstChild("HumanoidRootPart")
+
+    for player, overlayText in pairs(Overlays) do
+        if getgenv().PlayerOverlayEnabled and myHrp and player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character:FindFirstChildOfClass("Humanoid") then
+            local targetChar = player.Character
+            local targetHrp = targetChar.HumanoidRootPart
+            local targetHum = targetChar:FindFirstChildOfClass("Humanoid")
+
+            if targetHum.Health > 0 then
+                local head = targetChar:FindFirstChild("Head") or targetHrp
+                local screenPos, onScreen = camera:WorldToViewportPoint(head.Position + Vector3.new(0, 2, 0))
+
+                if onScreen then
+                    local distance = math.floor((myHrp.Position - targetHrp.Position).Magnitude)
+                    local heldTool = "None"
+                    local toolObj = targetChar:FindFirstChildOfClass("Tool")
+                    if toolObj then heldTool = toolObj.Name end
+
+                    overlayText.Position = Vector2.new(screenPos.X, screenPos.Y)
+                    overlayText.Text = string.format("👤 %s | 🩸 %d/%d HP | ⚡ SPD: %d | 📏 %dm | 🗡️ %s",
+                        player.Name, math.floor(targetHum.Health), math.floor(targetHum.MaxHealth), math.floor(targetHum.WalkSpeed), distance, heldTool)
+                    overlayText.Visible = true
+                else
+                    overlayText.Visible = false
+                end
+            else
+                overlayText.Visible = false
+            end
+        else
+            overlayText.Visible = false
+        end
+    end
+
+    for player, tracerData in pairs(Tracers) do
+        local line, text = tracerData.Line, tracerData.Text
+        if getgenv().TracersEnabled and myHrp and player.Character and player.Character:FindFirstChild("HumanoidRootPart") and player.Character:FindFirstChildOfClass("Humanoid") then
+            local targetHrp = player.Character.HumanoidRootPart
+            local targetHum = player.Character:FindFirstChildOfClass("Humanoid")
+
+            if targetHum.Health > 0 then
+                local screenPos, onScreen = camera:WorldToViewportPoint(targetHrp.Position)
+                if onScreen then
+                    local distance = math.floor((myHrp.Position - targetHrp.Position).Magnitude)
+                    line.From = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y)
+                    line.To = Vector2.new(screenPos.X, screenPos.Y)
+                    line.Visible = true
+
+                    text.Position = Vector2.new(screenPos.X, screenPos.Y - 20)
+                    text.Text = player.Name .. " [" .. tostring(distance) .. "m]"
+                    text.Visible = true
+                else
+                    line.Visible = false; text.Visible = false
+                end
+            else
+                line.Visible = false; text.Visible = false
+            end
+        else
+            line.Visible = false; text.Visible = false
+        end
+    end
+end)
+
+-- ==================== 8. ระบบล็อกกล้อง ====================
+RunService.RenderStepped:Connect(function()
+    local camera = workspace.CurrentCamera
+    
+    if getgenv().LockSelectedEnabled and SelectedPlayerName ~= "" then
+        local target = Players:FindFirstChild(SelectedPlayerName)
+        if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+            camera.CFrame = CFrame.new(camera.CFrame.Position, target.Character.HumanoidRootPart.Position)
+        end
+    elseif getgenv().LockEnabled then
+        local target = getClosestPlayer()
+        if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+            camera.CFrame = CFrame.new(camera.CFrame.Position, target.Character.HumanoidRootPart.Position)
+        end
+    end
+end)
+
+-- ==================== 9. ระบบกระสุนไม่จำกัด & Auto Shoot & Auto Kill Loop ====================
+task.spawn(function()
+    while task.wait(0.05) do
+        if (getgenv().AutoShootEnabled or getgenv().AutoKillLoopEnabled) and LocalPlayer.Character then
+            local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
+            if tool then
+                tool:Activate()
+                VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+                task.wait(0.02)
+                VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        if getgenv().AutoKillLoopEnabled then
+            local target = getClosestPlayer()
+            if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") and target.Character:FindFirstChildOfClass("Humanoid") then
+                local targetHum = target.Character:FindFirstChildOfClass("Humanoid")
+                local targetHrp = target.Character.HumanoidRootPart
+
+                while targetHum and targetHum.Health > 0 and getgenv().AutoKillLoopEnabled and target.Parent do
+                    if target.Character and (target.Character:FindFirstChildOfClass("ForceField") or target.Character:FindFirstChild("ForceField")) then
+                        break
+                    end
+
+                    local myChar = LocalPlayer.Character
+                    local myHrp = myChar and myChar:FindFirstChild("HumanoidRootPart")
+                    
+                    if myHrp and targetHrp then
+                        myHrp.CFrame = targetHrp.CFrame * CFrame.new(0, 0, 3)
+                        workspace.CurrentCamera.CFrame = CFrame.new(workspace.CurrentCamera.CFrame.Position, targetHrp.Position)
+                    end
+                    task.wait(0.03)
+                end
+            end
+        end
+    end
+end)
+
+RunService.Stepped:Connect(function()
+    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
+        local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if getgenv().SpeedEnabled then humanoid.WalkSpeed = getgenv().WalkSpeedValue end
+        if getgenv().JumpEnabled then humanoid.UseJumpPower = true; humanoid.JumpPower = getgenv().JumpPowerValue end
+    end
+
+    if getgenv().InfAmmoEnabled and LocalPlayer.Character then
+        local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
+        if tool then
+            for _, attrName in pairs({"Ammo", "Clip", "MaxAmmo", "StoredAmmo", "Bullets"}) do
+                if tool:GetAttribute(attrName) then tool:SetAttribute(attrName, 999) end
+            end
+            for _, v in pairs(tool:GetDescendants()) do
+                if v:IsA("IntValue") or v:IsA("NumberValue") then
+                    local nameLower = string.lower(v.Name)
+                    if string.find(nameLower, "ammo") or string.find(nameLower, "clip") then
+                        v.Value = 999
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- 10. สร้างหน้าต่าง UI
+local Window = Rayfield:CreateWindow({
+   Name = "Bluezy Hub v2",
+   LoadingTitle = "กำลังโหลด...",
+   LoadingSubtitle = "by Bluezy",
+   ConfigurationSaving = { Enabled = false },
+   Discord = { Enabled = false },
+   KeySystem = false
+})
+
+local MainTab = Window:CreateTab("Main Hub", 4483362458)
+local TargetTab = Window:CreateTab("Target Player", 4483362458)
+local PlayerTab = Window:CreateTab("Player Mod", 4483362458)
+local OilTab = Window:CreateTab("🛢️ Oil Scanner", 4483362458) -- แท็บสำหรับสแกนถังน้ำมัน
+
+-- ==================== Section 1: Combat & Auto Kill Loop ====================
+MainTab:CreateSection("🔫 Combat Mods & Auto Kill")
+
+MainTab:CreateToggle({
+   Name = "⚔️ เปิด/ปิด Auto Kill Loop (วาร์ปยิงจนตาย/ข้ามอมตะ)",
+   CurrentValue = false,
+   Flag = "AutoKillLoopToggle",
+   Callback = function(Value)
+      getgenv().AutoKillLoopEnabled = Value
+   end,
+})
+
+MainTab:CreateToggle({
+   Name = "🎯 เปิด/ปิด ยิงอัตโนมัติ (Auto Shoot / Fast Click)",
+   CurrentValue = false,
+   Flag = "AutoShootToggle",
+   Callback = function(Value)
+      getgenv().AutoShootEnabled = Value
+   end,
+})
+
+MainTab:CreateToggle({
+   Name = "♾️ เปิด/ปิด กระสุนไม่จำกัด (Infinite Ammo)",
+   CurrentValue = false,
+   Flag = "InfAmmoToggle",
+   Callback = function(Value)
+      getgenv().InfAmmoEnabled = Value
+   end,
+})
+
+-- ==================== Section 2: Performance & Display ====================
+MainTab:CreateSection("⚡ Performance & Screen FPS")
+
+MainTab:CreateToggle({
+   Name = "เปิด/ปิด แสดง FPS ข้างหน้าจอ (Display FPS)",
+   CurrentValue = false,
+   Flag = "ScreenFPSToggle",
+   Callback = function(Value)
+      getgenv().ShowScreenFPS = Value
+   end,
+})
+
+MainTab:CreateButton({
+   Name = "📉 ปรับภาพต่ำมาก (Potato Graphics / Booster)",
+   Callback = function()
+      Lighting.GlobalShadows = false
+      Lighting.FogEnd = 9e9
+      for _, v in pairs(Lighting:GetChildren()) do
+          if v:IsA("PostEffect") or v:IsA("Atmosphere") or v:IsA("Sky") then v:Destroy() end
+      end
+      
+      for _, obj in pairs(workspace:GetDescendants()) do
+          if obj:IsA("BasePart") then
+              obj.Material = Enum.Material.SmoothPlastic
+              obj.Reflectance = 0
+          elseif obj:IsA("Decal") or obj:IsA("Texture") then
+              obj:Destroy()
+          elseif obj:IsA("ParticleEmitter") or obj:IsA("Trail") then
+              obj.Enabled = false
+          end
+      end
+      
+      Rayfield:Notify({
+         Title = "สำเร็จ!", Content = "ลดคุณภาพกราฟิกเพื่อดัน FPS เรียบร้อยแล้ว",
+         Duration = 3, Image = 4483362458,
+      })
+   end,
+})
+
+-- ==================== Section 3: Visuals & Overlay ====================
+MainTab:CreateSection("👁️ Visuals & ESP Tracers")
+
+MainTab:CreateToggle({
+   Name = "เปิด/ปิด แสดงสถานะผู้เล่นสดลอยบนหัว (ไม่ต้องเปิด UI)",
+   CurrentValue = false,
+   Flag = "PlayerOverlayToggle",
+   Callback = function(Value)
+      getgenv().PlayerOverlayEnabled = Value
+   end,
+})
+
+MainTab:CreateToggle({
+   Name = "เปิด/ปิด เส้นแดงไปหาศัตรู (Red Tracers)",
+   CurrentValue = false,
+   Flag = "TracerToggle",
+   Callback = function(Value)
+      getgenv().TracersEnabled = Value
+   end,
+})
+
+MainTab:CreateToggle({
+   Name = "เปิด/ปิด ล็อกเป้าหมายคนที่ใกล้ที่สุด",
+   CurrentValue = false,
+   Flag = "LockToggle",
+   Callback = function(Value)
+      getgenv().LockEnabled = Value
+   end,
+})
+
+-- ==================== Target Player Tab ====================
+TargetTab:CreateSection("🎯 Select Target Player")
+
+local TargetDropdown = TargetTab:CreateDropdown({
+   Name = "เลือกผู้เล่นที่ต้องการ",
+   Options = {"Searching..."},
+   CurrentOption = {""},
+   Flag = "TargetDropdown",
+   Callback = function(Option)
+      SelectedPlayerName = type(Option) == "table" and Option[1] or Option
+   end,
+})
+
+TargetTab:CreateToggle({
+   Name = "เปิด/ปิด ล็อกกล้องใส่ผู้เล่นที่เลือก",
+   CurrentValue = false,
+   Flag = "LockSelectedToggle",
+   Callback = function(Value)
+      getgenv().LockSelectedEnabled = Value
+   end,
+})
+
+TargetTab:CreateButton({
+   Name = "⚡ วาร์ปไปหาผู้เล่นที่เลือก (TP Selected)",
+   Callback = function()
+      if SelectedPlayerName == "" or SelectedPlayerName == "Searching..." then
+          Rayfield:Notify({ Title = "ข้อผิดพลาด", Content = "กรุณาเลือกผู้เล่นจาก Dropdown ก่อน!", Duration = 3, Image = 4483362458 })
+          return
+      end
+
+      local target = Players:FindFirstChild(SelectedPlayerName)
+      if target and target.Character and target.Character:FindFirstChild("HumanoidRoo
